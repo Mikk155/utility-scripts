@@ -1,8 +1,43 @@
-
-
 import os
 
-for directory in [ "src", "utils" ]:
+# Maybe i missed something?
+implicit_casts = [
+    "void",
+    "bool",
+    "char",
+    "signed char",
+    "unsigned char",
+    "short",
+    "unsigned short",
+    "int",
+    "unsigned int",
+    "long",
+    "unsigned long",
+    "long long",
+    "unsigned long long",
+    "float",
+    "double",
+    "long double",
+    "const char",
+    "void**",
+    "nullptr_t",
+    "*",
+    "CBaseEntity",
+    "CBaseDelay",
+    "CBaseToggle",
+    "CBaseItem",
+    "CBaseMonster",
+    "CBasePlayer",
+]
+
+skips = [
+    "//",
+    "#define",
+    "#pragma",
+    "constexpr",
+]
+
+for directory in [ "src/game/client", "src/game/server", "src/game/shared" ]:
 
     for root, _, files in os.walk( directory ):
 
@@ -12,92 +47,124 @@ for directory in [ "src", "utils" ]:
 
                 file_path = os.path.join( root, file );
 
+                lines = [];
+
                 with open( file_path, 'r', encoding='utf-8' ) as file:
 
-                    updated_content = file.read();
+                    lines = file.readlines();
 
-                    updated_content = updated_content.replace( '\t', ' ' * 4 );
+                    in_open_comment = False;
 
-                    for typeof in [ "while", "for", "if" ]:
+                    for index_line, line in enumerate(lines.copy()):
 
-                        updated_content = updated_content.replace( f"{typeof} (", f"{typeof}(" );
+                        if not line:
+                            continue;
 
-                    updated_content = f"{updated_content}\n";
+                        if line.find( "/*" ) != -1:
+                            in_open_comment = True;
+                        
+                        if in_open_comment:
+                            if line.find( "*/" ) != -1:
+                                in_open_comment = False;
+                            continue;
 
-                    file.close();
+                        if any( line.strip( " " ).startswith( T ) for T in skips ) or any( line.strip( "\t" ).startswith( T ) for T in skips ):
+                            continue;
 
-                for typeof in [ "while", "for", "if" ]:
+                        if line.startswith( "\tEND_DATAMAP();" ):
+                            line = line.replace( '\t', '', 1 );
+                        elif line.startswith( "DEFINE_" ):
+                            line = f"\t{line}";
 
-                    updated_content = updated_content.replace( f"{typeof} (", f"{typeof}(" );
+                        for typeof in [ "while", "for", "if" ]:
 
-                # Maybe i missed something?
-                implicity_casts = [
-                    "void",
-                    "bool",
-                    "char",
-                    "signed char",
-                    "unsigned char",
-                    "short",
-                    "unsigned short",
-                    "int",
-                    "unsigned int",
-                    "long",
-                    "unsigned long",
-                    "long long",
-                    "unsigned long long",
-                    "float",
-                    "double",
-                    "long double",
-                    "char*",
-                    "const char*",
-                    "void*",
-                    "int*",
-                    "float*",
-                    "double*",
-                    "bool*",
-                    "void**",
-                    "nullptr_t"
-                ]
+                            line = line.replace( f"{typeof} (", f"{typeof}(" );
 
-                index = 0
+                        def is_in_string( line_read: str, char_index: int ) -> bool:
 
-                while index != -1:
+                            in_string = False;
+                            was_scape = False;
+                            last_index = 0;
+                            strings = [];
 
-                    oldindex = index;
+                            for quote_index, char in enumerate(line_read):
+                                if char == '"' and not was_scape:
+                                    in_string = not in_string;
+                                    if not in_string:
+                                        strings.append( [ last_index, quote_index ] );
+                                    else:
+                                        last_index = quote_index;
+                                elif char == "\\" and not was_scape:
+                                    was_scape = True;
+                                    continue;
+                                was_scape = False;
 
-                    index = updated_content.find( "(", index + 1 );
+                            for indexes in strings:
+                                if char_index < indexes[1] and char_index > indexes[0]:
+                                    return True;
+                            return False;
 
-                    if index == -1:
-                        break;
+                        index = 0
 
-                    if not updated_content[index+1:index+2] in [ ")", " " ]:
+                        while index != -1:
 
-                        updated_content = updated_content[0:index+1] + " " + updated_content[index+1:]
+                            oldindex = index;
 
-                index = 0
+                            index = line.find( "(", index + 1 );
 
-                while index != -1:
+                            comment = line.rfind( "//" );
+                            if index == -1 or ( comment != -1 and comment < index ):
+                                break;
 
-                    oldindex = index;
+                            if is_in_string( line, index ):
+                                continue;
 
-                    index = updated_content.find( ")", index + 1 );
+                            if not line[index+1:index+2] in [ ")", " " ]:
 
-                    if index == -1:
-                        break;
+                                line = line[0:index+1] + " " + line[index+1:]
 
-                    if not updated_content[index-1:index] in [ "(", " " ]:
+                        index = 0
 
-                        updated_content = updated_content[0:index] + " " + updated_content[ index: ]
+                        while index != -1:
 
-                for casts in implicity_casts:
+                            oldindex = index;
 
-                    updated_content = updated_content.replace( f"( {casts} )", f"({casts})" );
+                            index = line.find( ")", index + 1 );
+
+                            comment = line.rfind( "//" );
+                            if index == -1 or ( comment != -1 and comment < index ):
+                                break;
+
+                            if is_in_string( line, index ):
+                                continue;
+
+                            if not line[index-1:index] in [ "(", " " ]:
+
+                                line = line[0:index] + " " + line[ index: ]
+
+                        for casts in implicit_casts:
+
+                            line = line.replace( f"( {casts} )", f"({casts})" );
+                            line = line.replace( f"( {casts}* )", f"({casts}*)" );
+
+                        line = line.replace( f"( \"Id Technology\" )", f"(\"Id Technology\")" );
+                        line = line.replace( f"( c )", f"(c)" );
+                        line = line.replace( f" )\"", f")\"" );
+                        line = line.replace( f"R\"( ", f"R\"(" );
+
+                        line = line.replace( '\t', ' ' * 4 );
+                        lines[index_line] = line;
+
+                    if lines[len(lines)-1] != "":
+                        lines.append( "" );
 
                 try:
 
                     with open(file_path, 'w', encoding='utf-8') as file:
 
-                        file.write( updated_content );
+                        file.writelines( lines );
+
+                        lines = [];
 
                 except Exception as e:
 
